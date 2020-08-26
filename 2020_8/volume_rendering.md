@@ -40,4 +40,4 @@ volume rendering describes a wide range of techniques for generating images from
 ### 截止计算
 
 - 包围盒求交， 如何找到能够刚好包围物体的包围盒
-- 通过与表面求交计算出光线长度，将由光栅化渲染物体的被面（前面剔除）和前面的坐标相减得到。
+- 通过与表面求交计算出光线长度，将由光栅化渲染物体的被面（前面剔除）和前面的坐标相减得到。$$

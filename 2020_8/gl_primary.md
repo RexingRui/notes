@@ -35,3 +35,18 @@ function pointToSegmentDistance(point, line) {
 
 三个顺时针同向则在三角形内
 
+### webgl 状态机
+ A piece of state is simply some value stored in the OpenGL context. 
+ When a context is created, every piece of state is initialized to a well-defined default value. The state table defines what the initial value is for every piece of OpenGL state 
+- functions that set state into the context
+- functions that query state
+- functions that render given the current state of the context.
+
+webgl 的渲染方式是一种状态机，webgl上下文被创建后每一种状态被赋予初始值，当调用webgl的渲染api时，渲染管线会根据当前的设置的状态值来渲染  
+
+在调用绘制三角形前gl.drawElements(),需要重新绑定buffer,目的让当前的渲染函数在指定的buffer下（状态下）渲染， 绘制结束后，解绑状态以防影响下一帧的渲染  
+
+### 屏幕像素转到裁剪空间
+- 裁剪空间[-1, 1],屏幕坐标值通过除以画布的宽和高，转化到[0, 1]内
+- 再乘以2，减1转化到[-, 1]
+- canvas坐标系左上角为(0, 0)点，gl的坐标系做下角为原始点，故需要对y坐标反转
