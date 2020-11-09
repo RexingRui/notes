@@ -193,4 +193,37 @@ canvasRenderingContext2D.setTransform(T), T为变化矩阵。通过该接口可�
 - 变化的合成
 在二维坐标系下，对物体右乘矩阵实现变化时。是相对坐标系的原点。而实际需求中需要围绕图像中心做旋转、缩放等变化。为此，可以分步实现，首先将图像
 的中心平移至坐标系原点，在做旋转缩放变化，这样图像是基于自身中心在变化。其次在对图像做平移变化，最后对图像做首次平移变化的反变化。  
-- 
+
+
+
+### cornerstone 显示
+#### 数据结构
+##### enabledElement
+enabledElement 与 一个HTMLElement元素（通常为DIV）绑定。其属性包含了cornerstone中典型的数据结构image, viewport, canvas等。当通过HTMLElement获取enabledElement时，可以获取显示图像的所有信息。  
+对外暴露了enable/disenable接口实现绑定/解绑。绑定的过程。
+enabledElements.js文件（模块）中，定义了enabledElements数组变量，暴露get，set借口操作enabledElement  
+enable一个元素过程
+- 生成一个enabledElement,将其添加到enabledElements
+- 对外触发一个enabled事件，对HTMLElement绑定resize事件
+- 实现一个draw函数绘制图像，内部调用requestAnimationFrame不断重绘
+实现借鉴
+- 模块化的思想，将生成的enabledElement实例放在另一个模块中（enableElements）管理
+- 抛出一个自定义事件
+  ```js
+  function triggerEvent (el, type, detail = null) {
+  let event;
+
+  // This check is needed to polyfill CustomEvent on IE11-
+  if (typeof window.CustomEvent === 'function') {
+    event = new CustomEvent(type, {
+      detail, // 事件携带的数据存储在detail中
+      cancelable: true
+    });
+  } else {
+    event = document.createEvent('CustomEvent');
+    event.initCustomEvent(type, true, true, detail);
+  }
+  // dispatch过程时立即的，监听的元素会立即执行
+  return el.dispatchEvent(event);
+}
+  ```
