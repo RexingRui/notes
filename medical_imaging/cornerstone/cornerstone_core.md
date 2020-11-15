@@ -204,10 +204,15 @@ enabledElement 与 一个HTMLElement元素（通常为DIV）绑定。其属性�
 enabledElements.js文件（模块）中，定义了enabledElements数组变量，暴露get，set借口操作enabledElement  
 enable一个元素过程
 - 生成一个enabledElement,将其添加到enabledElements
+
 - 对外触发一个enabled事件，对HTMLElement绑定resize事件
+
 - 实现一个draw函数绘制图像，内部调用requestAnimationFrame不断重绘
-实现借鉴
+
+  ##### 实现借鉴
+
 - 模块化的思想，将生成的enabledElement实例放在另一个模块中（enableElements）管理
+
 - 抛出一个自定义事件
   ```js
   function triggerEvent (el, type, detail = null) {
@@ -227,3 +232,210 @@ enable一个元素过程
   return el.dispatchEvent(event);
 }
   ```
+
+##### image
+image对象是针对dicom图像的具体描述，每个image对象都有一个imageId。根据dicom文件中的DataSet解析为minPixelValue/maxPixelValue/slope/windowCenter/rows等属性，也提供获取像素值getPixelData，获取图像getCanvas等接口
+image为需要显示的图像，image作为enabledElement的属性。如果其不存在，则无法渲染。
+cornerstone本身并没有提供接口用于生成image对象，而是将创建流程交给了使用者。
+##### imageLoader (Function)
+cornerstone提供了loadImage/loadImageAndCache接口用于载入image。接受一个参数imageId（String）,返回一个对象{promise, error}promise为Promise， resolve(image)，error表示载入失败
+imageId的结构（pluginName + ':' + any）定义了一种imageLoader，imageLoader作为插件的形式由用户编写，通过registerImageLoader(pluginName, imageLoader)进行注册使用。
+```js
+// image loader  
+const myImageLoader = (imageId) => {
+    let error = null
+    const imagePromise = new Promise(async (resolve, reject) => {
+      try {
+        const dicomData = await fetch(imageId.replace("mayLoader:", ""));
+        const image = createImage(imageId, dicomData);
+        resolve(image)
+      } catch(err) {
+        error = err;
+      }
+    });
+    
+    return {
+    	promise: imagePromise,
+      error
+    }
+  }
+// register
+cornerstone.registerImageLoader('mayLoader', myImageLoader);
+// create image
+// imageId should have imageLoader name
+function createImage(imageId, dicomData) {
+  const {rows, columns,slope, intercept, windowCenter, windowWidth} = dicomData;
+  const {minPixelValue, maxPixelValue} = findMinAndMaxPixel(dicomData.pixels)
+	return {
+    imageId,
+   	getPixelData: () => dicomData.pixels,
+    getCanvas: () => null, // apply in RGB image
+    minPixelValue ,
+    maxPixelValue ,
+    slope: 1.0,
+    intercept ,
+    windowCenter ,
+    windowWidth ,
+    render: cornerstone.renderGrayscaleImage,
+    getPixelData: getPixelData,
+    rows,
+    columns,
+    color: false, // is RGB image
+    columnPixelSpacing: 0.67578,
+    rowPixelSpacing: 0.67578,
+    sizeInBytes: width * height * 2,
+  }
+}
+```
+
+[CornerstoneWODOImageLoader](https://github.com/cornerstonejs/cornerstoneWADOImageLoader)基于dicom协议中的WODO编写的imageloader。
+
+imageLoader的意义
+
+- 插件的形式编写，可实现多种不同获取image的形式
+- 返回结果的异步，满足web端对资源获取的异步性
+- 提供了缓存的功能，可定制的缓存加载过的图像
+
+##### 实现借鉴
+
+imageLoader.js模块，内部定义了imageLoaderObject对象，其key为imageLoader的name, value为imageLoader。  
+
+通过注册过后的imageLoader都保存在imageLoaderObject中，在调用loadImage接口时通过imageId中包含的imageLoader name可以从imageLoaderObject中找到相对应的imageLoader。从而支持多种方式/图像的加载。
+
+ imageCache.js模块，内部定义了imageCacheDict对象和cachedImages数组，它们都存cacheImage这种数据结构
+
+- loaded [Boolean]
+- imageId 
+- imageLoadObject : imageLoader返回的对象{promise, error}
+- timeStamp
+- sizeInBytes
+- image
+
+imageCacheDict以imageId为key，value为cacheImage, cacheImages存了cacheImage。
+
+通过imageLoaderObject由于其返回Promise, 因此可以被多处使用，并且该Promise的fullied状态的*[[PromiseResult]]保存了image对象。
+
+缓存实现：在loadImage/loadImageAndCache时，第一步根据imageId从cacheImages中找到cahcheImage对象，返回cacheImage的imageLoadObject属性。通过调用其promise找到之前reslove过的image对象
+
+```js
+// imageLoadObject 多处使用
+// 首次载入图像， 内部调用promise,抛出一个载入完成事件
+ imageLoadObject.promise.then(function (image) {
+    triggerEvent(events, EVENTS.IMAGE_LOADED, { image });
+  }, function (error) {
+    const errorObject = {
+      imageId,
+      error
+    };
+
+    triggerEvent(events, EVENTS.IMAGE_LOAD_FAILED, errorObject);
+  });
+// 作为loadImage/loadImageAndCache的返回值
+return imageLoadObject
+// 图像载入后，缓存的处理
+imageLoadObject.promise.then(function (image) {
+    cachedImage.image = image;
+    cachedImage.sizeInBytes = image.sizeInBytes;
+    cacheSizeInBytes += cachedImage.sizeInBytes;
+    const eventDetails = {
+      action: 'addImage',
+      image: cachedImage
+    };
+
+    triggerEvent(events, EVENTS.IMAGE_CACHE_CHANGED, eventDetails);
+})
+```
+##### viewport
+
+视窗作为图像的载体，决定了如何显示一张dicom图像。缩放、翻转、平移，窗宽窗位的操作等
+
+viewport对象含有scale, voi, hfli等属性，根据viewport，计算视窗canvas的transform。canvasRendering2dContext.setTransform(transform)更改canvas坐标系（相当于作用图像）。前面已经介绍了仿射变换以及窗值变化的原理实现。
+
+##### 坐标系转化
+
+- 视窗坐标系， 左上角为坐标系的原点，向右为x的正方向，向下为y的正方向
+- 图像坐标系，dicom图像的像素以row-order方式存储在数组中，比如，将数组内的数据按个填充在一个矩形网格中。从左到右，从上到下。网格的左上角坐标系的原点，向右向下为正。
+
+一个坐标系(二维)，可以用原点(**p**)和一组基表示(**u**, **v**), 在坐标系中的任意一点坐标值（u, v）可描述为
+
+**q** +u**u** + v**v** ，假设存在一个全局的坐标系原点**o** ，基为**x**, **y**。设视窗坐标系为全局坐标系，图像坐标系为原点(**q**)和基为(**u**, **v**)的坐标系。**q**,**u**, **v**的值都是相对全局坐标系的。存在一点p在视窗坐标系下的值为(x,y),在图像坐标系下的值为(i, j)。坐标值描述的点只是基于该坐标系原点和基的简写。
+
+![截屏2020-11-11 下午8.05.14](https://tva1.sinaimg.cn/large/0081Kckwgy1gklhlwlrwbj30y604wgm6.jpg)
+
+![截屏2020-11-11 下午8.05.36](https://tva1.sinaimg.cn/large/0081Kckwgy1gklhml61txj30cm03kmx8.jpg)
+
+至此，推导出了从一个坐标系到另一个坐标系的变化矩阵T
+
+对于图像坐标系和视窗坐标系之间的转换，可以这样理解。最初的时候二者是重合的，变化矩阵T为单位阵，当执行setTransform(transform)操作后。改变了图像坐标系，此时T为transform，表示图像坐标系到视窗坐标系的变化。对于(i, j, 1)左乘transform可以得到(x,  y, 1).同样(x, y,1)左乘invert(trannsform)可以得到(i, j, 1)
+
+##### 实践借鉴
+
+- 封装了Tranform类，用于二维坐标下的矩阵运算
+- 定义了一个显示区域，将dicom图像画在视窗的显示区域上
+
+Transform内部用一个长度为6的数组m描述了变化矩阵T，因为T的最后一列为（0， 0， 1）所以可以简化处理。数组m为数据存储为行阶矩阵。gl为列阶矩阵。
+
+viewport定义了一个显示区域displayArea{brhc: {x, y}, tlhc: {x, y}},通常来说左上角tlhc位置(1,  1)。右下角位置为图像的行数、列数。在生成一张dicom图像以及设定完canvas的Transform后。画布上下文将图像画在画布上
+
+```js
+const sx = enabledElement.viewport.displayedArea.tlhc.x - 1;
+const sy = enabledElement.viewport.displayedArea.tlhc.y - 1;
+const width = enabledElement.viewport.displayedArea.brhc.x - sx;
+const height = enabledElement.viewport.displayedArea.brhc.y - sy;
+// 保证了初始时，图像和视窗重合。
+context.drawImage(renderCanvas, sx, sy, width, height, 0, 0, width, height);
+```
+
+对于mpr的图像，由于行列方向上的spacing可能不同。存在另种显示模式presentationSizeMode（viewport的属性）缺省的‘’NONE“，“SCALE TO FIT”。
+
+- NONE 会根据spacing的比值调整缩放值viewport.scale
+- SCALE TO FIT, 适应当前窗口计算缩放值
+
+##### events
+
+ornerstone所有的事件为自定义事件，事件名称全部定义在events模块中。内部实现中triggerEvent函数新建自定义事件，然后dispatchEvent抛出事件。函数的第一个参数为事件触发/接受对象。对于dom元素，它们都有addEventListener/dispatchEvent接口。但triggerEvent并不是只针对dom节点元素。因此在event模块中封装了一个EventTarget类，它是对DOM EventTaget接口的一种实现。让EventTarget的实例拥有和DOM元素一样的事件监听/触发机制。  关于dipatchEvent
+
+- dipatchEvent与原生dom事件不同，dispatch事件后会立即执行，而不是异步的执行。事件handler中不能抛错，否则影响整个程序的执行。
+- dispatchEvent事件后，如果任意一个事件监听者的回调中执行了Event.preventDefault，则返回false，否则为true；conerstone的事件handler中并没有按照这样的规则实现。
+
+
+
+##### alph 通道快速渲染灰度图
+
+[imageData](https://developer.mozilla.org/zh-CN/docs/Web/API/ImageData/ImageData)的data属性是指图像的像素。每个像素由四个8位无符号整型数(0-255)构成,分别代表r,g,b,a。对于CT，很多情况下展现的是灰度图。将dicom图像存储的像素值，通过modalityLUT, voiLUT操作后映射成0-255区间的灰度值。在填充像素时，将像素值的r,g,b都设为该灰度值，a通道身为255。这样完成了灰度图的渲染。
+
+如果，将图像在初始化时全部填充白色像素值(255, 255, 255, 255).然后在渲染填充像素时，只将a通道值设为灰度值。那么也能完成CT灰度图的渲染。因为在0-255区间内CT值大，图像越白。通过a通道的值控制灰度图的黑白，从而达到一样的显示效果，但在遍历填充像素时的操作减少，使整个渲染性能提升。
+
+##### composite layers
+
+有时需要将多张图像同时画在一个画布上，如pet ct图像。enabledElement对象定义了layers[Array]属性, 数组内部元素为layer对象，layer可以认为是简化版的enabledELement, 它同样含有自己的image，viewport。同时其options属性定义了其特有的属性，如visible, opacity等。layers模块实现了layer的相关接口，addLayer, removeLayer, getLayer。
+
+在调用addLayer时函数返回一个layerId, layerId为layer对象的属性。通过layerId作为get/remove/setImage/activeLayer等函数的必要参数。多层layers中有一层作为active(base) layer, 该layer的imge，viewport为它们所绑定enabledElement对象的image，viewport。并将layerId设为enabledElement.activeLayerId;
+
+```js
+  enabledElement.activeLayerId = layerId;
+  enabledElement.image = layer.image;
+  enabledElement.viewport = layer.viewport;
+```
+
+渲染过程
+
+- 每一帧渲染时，若enabledElement 元素存在layers属性，则调用drawCompositeImage
+- viewport同步处理，所谓同步，是让其他非activeLayer跟随activeLayer的viewport变化而变化。
+  - enabledElement.syncViewports属性表示是否所有layers同步渲染。 enabledElement.lastSyncViewportsState记录上次同步的状态，可以减少同步运算
+  - 每个layer定义syncProps属性，里面存放上一次渲染改layer的scale值。通过对比这次渲染的scale，求出变化量，从而更新同步
+- 遍历所有可见的layers（visible不为false， opacity不为0），根据其viewport和对应的render（gray/color...）生成画布，将其画在enabledElement.canvas上。
+
+##### webgl
+
+cornstone支持webgl渲染dicom图像来提高性能。
+
+cornestone.enable()元素，若options中含有renderer字段，且其值为webgl，则表示使用webgl渲染。
+
+- 检查是否浏览器支持webgl环境
+- 初始化webgl中使用的shader和buffer（只初始化一次）
+  - shader， 针对每种pixel的数据类型，创建一个fragment shader。webgl使用的webgl1, 对数据类型的并不支持float类型。若pixel的Int16类型， 需要将其值存在三个uint8类型的数中。使用gl.RGB作为纹理参数的format。fragmentShader中，读取纹理值后(unit8)转化成int16类型，在进行modalitylut 和voilut，计算出灰度值. 在vertexShader需要根据图像的宽高比，将顶点坐标转化成NDC坐标值
+  - buffer， ，只需要在vertexShader定义四个顶点（正方形），。纹理坐标值通过插值在fragmentShader中使用。
+- dicom图像的主要tag值通过uniform变量传到fragmentShader中，在shader中做lut处理
+- 每一帧渲染时，通过webgl渲染一张原始大小的dicom图像，再画到画布上。
+
