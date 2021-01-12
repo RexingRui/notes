@@ -2,9 +2,9 @@
 
 ## dicom 简介
 dicom（Digital Imaging and Communications in Medicine), 医学影像的一组协议。包含了存储、打印、传输等。[具体详细介绍](https://zh.wikipedia.org/wiki/DICOM)。[官网](https://www.dicomstandard.org/)  
-dicom file, 存储包含病人、检查、影像信息的文件，通常以dcm为扩展名。[文件格式](http://dicom.nema.org/medical/dicom/current/output/chtml/part10/chapter_7.html), 由meta information 和 data set 构成。
-data set 由data elements 构成。每一个data element 都有一个tag（xxxx, xxxx）x为十六进制数，vr数据类型，vl数据长度，数据值。[dicom tags](https://www.dicomlibrary.com/dicom/dicom-tags/)
-例如CT扫描生成的图像，其图像信息存储在((7FE0,0010)tag中  
+dicom file, 存储包含病人、检查、影像信息的文件，通常以dcm为扩展名。[文件格式](http://dicom.nema.org/medical/dicom/current/output/chtml/part10/chapter_7.html)
+dicom file中由data elements 构成。每一个data element 都有一个tag（xxxx, xxxx）x为十六进制数，vr数据类型，vl数据长度，数据值。[dicom tags](https://www.dicomlibrary.com/dicom/dicom-tags/)
+例如CT扫描生成的图像，其CT值在tag为(7FE0,0010)的element中。
 
 ## cornertone-core简介
 由javascript编写，[构建web端的医学影像平台中的*显示环节*](https://docs.cornerstonejs.org/)。对于复杂的web端的医学影像可视化项目，底层可以依赖于cornerstone-core做二维图像渲染。  
@@ -12,7 +12,7 @@ data set 由data elements 构成。每一个data element 都有一个tag（xxxx,
 ### 图像信息
 对于一张由CT扫描的图像，要准确的渲染成一张数字图像。需要理既以下相关的 data elements
 - Samples per Pixel (0028, 0002), 字面理解每个像素的采样数，灰度图1, RGB图为3
-- Photometric Interpretation (0028, 0004) 主要用于jepg压缩的图像，待补充
+- Photometric Interpretation (0028, 0004) 颜色空间
 - Planar Configuration (0028，0006), 只对于samples per pixel 大于1时起作用，主要针对rgb图像，其三个颜色成分的存储排列。0: color by pixel, R1-G1-B1-R2-G2-B2..., 1: color By Plane, R1-R2-R3...-G1-G2...-B1-B2...
 - Rows (0028, 0010), 垂直方向上向下采样因子的倍数。简单认为在在图像上一列像素的总数
 - Columns (0028, 0011), 类似Rows，方向为水平方向
@@ -64,6 +64,7 @@ const dicom = {
 canvasContext2d.putImageData(imageData, dx, dy)
 [imageData](https://developer.mozilla.org/zh-CN/docs/Web/API/ImageData) 对象，表示一定举行区域内的像素值。每个像数值由RGBA四分分量，每个分量的数据类型为[Uint8ClampedArray](https://developer.mozilla.org/zh-CN/docs/Web/JavaScript/Reference/Global_Objects/Uint8ClampedArray)(对于超出0-255区间内的值会被裁剪)。data属性为Uint8ClampedArray数组，像素值在数组中依次排列。  
 imageData对象，可以由CanvasRenderingContext2D.createImageData/getImageData创建。  
+
 ```js
 //...
 // 假设图像为灰度图
@@ -123,7 +124,7 @@ if (minValue < 0) {
 function voiLutLinearFunc(pixel, windowWidth, windowCenter) {
   windowWidth = Math.max(windwoWidth, 1);
   // 由于使用的Unit8ClampedArray数据类型会自动裁剪不在0-255范围的值
-  return ((pixel - windowCenter) / windowWidth + 0.5) * 055;
+  return ((pixel - windowCenter) / windowWidth + 0.5) * 255;
 }
 ```
 执行putImageData后canvas上将会显示大小为rows * columns的图像，由于用户实际看图的视窗并不为canvas的大小。为此可将图像做缩放后放在用户视窗的中心。引入viewport 概念
@@ -234,9 +235,10 @@ enable一个元素过程
   ```
 
 ##### image
-image对象是针对dicom图像的具体描述，每个image对象都有一个imageId。根据dicom文件中的DataSet解析为minPixelValue/maxPixelValue/slope/windowCenter/rows等属性，也提供获取像素值getPixelData，获取图像getCanvas等接口
+image对象是针对dicom图像的具体描述，每个image对象都有一个imageId。根据dicom文件中的dicom element解析为minPixelValue/maxPixelValue/slope/windowCenter/rows等属性，也提供获取像素值getPixelData，获取图像getCanvas等接口
 image为需要显示的图像，image作为enabledElement的属性。如果其不存在，则无法渲染。
 cornerstone本身并没有提供接口用于生成image对象，而是将创建流程交给了使用者。
+
 ##### imageLoader (Function)
 cornerstone提供了loadImage/loadImageAndCache接口用于载入image。接受一个参数imageId（String）,返回一个对象{promise, error}promise为Promise， resolve(image)，error表示载入失败
 imageId的结构（pluginName + ':' + any）定义了一种imageLoader，imageLoader作为插件的形式由用户编写，通过registerImageLoader(pluginName, imageLoader)进行注册使用。
@@ -347,9 +349,9 @@ imageLoadObject.promise.then(function (image) {
 ```
 ##### viewport
 
-视窗作为图像的载体，决定了如何显示一张dicom图像。缩放、翻转、平移，窗宽窗位的操作等
+视窗作为图像的载体，决定了如何显示一张dicom图像。以及对图像的缩放、翻转、平移，窗宽窗位的操作等
 
-viewport对象含有scale, voi, hfli等属性，根据viewport，计算视窗canvas的transform。canvasRendering2dContext.setTransform(transform)更改canvas坐标系（相当于作用图像）。前面已经介绍了仿射变换以及窗值变化的原理实现。
+viewport对象含有scale, voi, displayArea等属性，根据viewport，计算视窗canvas的transform。canvasRendering2dContext.setTransform(transform)更改canvas坐标系（相当于作用图像）。前面已经介绍了仿射变换以及窗值变化的原理实现。
 
 ##### 坐标系转化
 
